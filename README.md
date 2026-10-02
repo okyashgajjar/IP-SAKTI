@@ -5,23 +5,32 @@ An AI-powered legal guidance orchestrator designed for Ayurveda Intellectual Pro
 ---
 
 ## 🛑 The Problem
-Ayurveda practitioners, startups, and researchers face a fragmented and complex legal landscape. Navigating the intersections of the **Drugs & Cosmetics Act**, **FSSAI regulations**, **Biological Diversity Act (ABS compliance)**, and international patent law (WIPO) requires immense domain expertise. Startups frequently face legal action or export bans due to improper classification (e.g., confusing "Ayurveda Aahara" with a proprietary medicine) or missing ABS approvals. Traditional legal consultations are slow, expensive, and often lack cross-domain regulatory knowledge.
+Ayurveda practitioners, startups, and researchers face a highly complex legal landscape.
+- **Fragmented Laws:** Users must navigate multiple conflicting domains simultaneously (Drugs & Cosmetics Act, FSSAI regulations, Biological Diversity Act, WIPO patent laws).
+- **High Risk of Non-Compliance:** Startups frequently face export bans or legal action because they misunderstood regulatory boundaries. 
+  - *Example:* Misclassifying a proprietary medicine as an "Ayurveda Aahara" (food supplement) under FSSAI, triggering regulatory penalties.
+- **Costly & Slow:** Traditional IP and legal consultations are extremely expensive, slow, and often lack specialized cross-domain Ayurveda knowledge.
 
 ## 🛡️ Mitigation
-We needed a system that acts as a highly-trained IP Facilitator—not just a generic chatbot, but a deterministic legal reasoning engine. The system must never hallucinate laws; it must actively retrieve, cross-reference, and cite specific Acts, Sections, and Rules. If a query is too vague or carries high legal risk, it must mitigate liability by refusing to answer or escalating to a human expert.
+We designed a deterministic legal reasoning engine that acts as a strict IP Facilitator, mitigating liability through built-in guardrails.
+- **Zero Hallucination:** The system is strictly forbidden from "guessing" laws. It must actively retrieve and cross-reference real statutory text.
+- **Hard Citations:** Every claim must be backed by a specific Act, Section, or Rule.
+- **Risk Assessment Guardrails:** 
+  - *Example:* If a user asks "Can I patent this secret formula?", the system assesses the query as "High Risk / Low Confidence", refuses to synthesize a potentially harmful answer, and escalates the query to a human IP lawyer.
 
-## 💡 How We Solve the Problem
+## 💡 How We Solve It
 We built a **LangGraph-based Orchestrator** featuring an 8-node deterministic pipeline. 
-1. **Dynamic Tool Routing:** The LLM parses the user intent and jurisdiction, deciding exactly which statutory databases (AYUSH, NBA, FSSAI, India Code, WIPO Lex) to query.
-2. **SOLID Data Adapters:** We interface with these databases using decoupled retrieval adapters, ensuring strict legal data extraction.
-3. **Citation & Feedback Loops:** Our `Citation Validator` node ensures the LLM's response contains hard legal citations. If it doesn't, the graph structurally loops back to fetch more evidence.
-4. **Risk Assessment:** A `Confidence Assessor` scores the legal risk of the query. High-risk/low-confidence queries bypass the answer synthesis entirely and are routed to an escalation queue, preventing hallucinatory legal advice.
+1. **Dynamic Tool Routing:** The LLM parses the user intent to decide exactly which statutory databases to search.
+   - *Example:* A query about exporting Neem automatically triggers searches in the NBA (Access & Benefit Sharing) and WIPO Lex databases.
+2. **SOLID Data Adapters:** We interface with databases using completely decoupled retrieval adapters, ensuring strict legal data extraction.
+3. **Citation & Feedback Loops:** Our `Citation Validator` checks the AI's response for hard legal citations. If citations are missing, the graph structurally loops backwards to fetch more evidence.
+4. **Escalation Queue:** Queries that fail the `Confidence Assessor` are instantly routed away from the user and into a human review queue.
 
 ## ⚡ Latency & Scaling
-To ensure real-time enterprise performance (bypassing the slow nature of complex LLM chains):
-- **Parallel Retrieval:** The `Evidence Retrieval` node queries all required databases concurrently.
-- **Auto-Routing Free Tier:** Configured natively with `openrouter/free` to auto-route LLM requests to the fastest available node (like Gemma-4 or Nemotron), guaranteeing sub-5 second responses.
-- **Monolithic Speed:** Designed using a monolithic PostgreSQL + pgvector architecture (modeled here via SQLite for local testing) to avoid the distributed latency of multi-hop microservices.
+To ensure real-time enterprise performance:
+- **Parallel Retrieval:** The `Evidence Retrieval` node queries all required databases simultaneously rather than sequentially.
+- **Auto-Routing Models:** Configured natively with `openrouter/free` to auto-route LLM requests to the fastest available node (like Gemma-4 or Nemotron), bypassing rate-limit hangups.
+- **Monolithic Speed:** Designed using a monolithic PostgreSQL + pgvector architecture (modeled here via SQLite for local testing) to avoid the network latency inherent in microservices.
 
 ---
 
