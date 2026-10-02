@@ -1,0 +1,107 @@
+## 1. Executive Summary
+Chatbot answer Ayurveda IP + drug-reg + ABS questions. Every claim cite statute/rule/treaty article. Two lanes: India, International. Classify formulation first (classical / proprietary / new drug / phytopharma / Aahar / cosmetic). Abstain when unsure. Mode: hackathon (SIH PS 26045).
+
+**Hard truth first:** many teams already build this exact thing. Public repos found: Hybrid RAG, Bhashini, ChromaDB, dual-pane statutory engine; jurisdiction isolation, 6-category classifier, hybrid retrieval with RRF and cross-encoder rerank; TKDL resemblance scoring via TF-IDF; live deployed app with confidence scoring and expert/grievance workflow. Feature checklist = table stakes. Judges see same slide many times.
+
+## 2. Problem
+- Problem: Ayurveda innovator cannot tell which law applies. Product type decides IP posture AND regulation.
+- Cause: rules scattered (Patents, BD Act, D&C Act, FSSAI, treaties), plain-language guidance absent.
+- Impact: innovation under-protected, TK exposed abroad, ABS non-compliance risk.
+- NOT the problem: "no chatbot". Problem = trustworthy, cited, jurisdiction-clean guidance.
+
+## 3. Users
+| User | Pain | Goal |
+|---|---|---|
+| AYUSH startup/MSME | Patent vs proprietary vs new drug unclear | Next step + right form |
+| Vaidya/practitioner | Fear classical recipe gets patented | Know what protects them |
+| Researcher/cultivator | ABS duty unclear | Compliance path |
+| AIIA facilitator | Repeat basic queries | Escalations only |
+| Payer | Ministry/AIIA, not user | Measurable reach |
+
+## 4. Journey
+Before: Google → conflicting blogs → paid consultant. After: describe product → 2-3 clarifying questions → category → India lane / international lane with citations → registry pointer → escalate if confidence low.
+
+## 5-7. Why, Existing, Gap
+Why: cost of consultant vs MSME budget; misappropriation risk. Existing: generic LLMs (hallucinate section numbers), IP India portals (no guidance), TKDL (not for you, see below), plus the competing SIH repos.
+
+Gap NOT in features. Gap in **proof**: who shows measured citation correctness and safe abstention? PS itself says output judged on accuracy, citation correctness, abstention, multilingual quality. Most repos claim, few measure. Differentiation type: **Data + trust**, not tech.
+
+## Trap: TKDL
+TKDL closed. Access limited to sixteen patent offices under a non-disclosure agreement. Public cannot query it. So "TKDL prior-art check" = you cannot search TKDL. Honest design: pointer to TKDL + similarity check against **open** sources (First Schedule texts, published pharmacopoeias/formularies, patent databases). Label output "possible overlap with public classical text", never "TKDL says". Claim otherwise = fabricated authority, violates PS rule.
+
+## 8-10. Solution + Requirements
+```
+Query → language detect/translate → jurisdiction toggle
+ → intent router (classify | IP-type | ABS | reg)
+ → [classify: deterministic state machine, ask ≤3 Qs]
+ → retrieve (BM25 + vector, metadata filter by jurisdiction)
+ → rerank → generate w/ forced citations
+ → citation verifier (quote exists in chunk?)
+ → confidence → answer | abstain | escalate
+```
+Must: jurisdiction lane split, classifier, cited answers, verifier, abstain, disclaimer, 3+ languages, eval harness.
+Should: ABS helper (Form/authority pointer), escalation form, audit log.
+Could: voice, IP India registry deep links.
+Won't (MVP): knowledge graph, paid-source connectors, real TKDL query.
+
+NFR: P95 answer < 8s (LLM-bound), DPDP-aligned: no PII stored by default, consent for logs.
+
+## 11-12. Stack (Requirement → Tech → Why → Trade-off)
+- Classifier → plain Python state machine, not LLM → deterministic, testable → less flexible.
+- Retrieval → Postgres + pgvector + tsvector, or Chroma if speed matters → one DB, hybrid search → Chroma has no native BM25.
+- Orchestration → FastAPI + simple pipeline; LangGraph only for clarify-loop → you already know it → skip agents elsewhere; more agents = more latency, more failure.
+- LLM → hosted API (Groq/OpenRouter/Claude), small fallback → your laptop (Celeron, ~7GB RAM) cannot run local models; do not plan around Ollama.
+- Multilingual → Bhashini for translate/ASR if registration works. **Unverified: check API access, quota, turnaround.** Fallback: LLM translate.
+- Frontend → Next.js/React, two-tab lane UI.
+- No Kubernetes, no microservices, no Neo4j.
+
+## 13-14. Bottlenecks
+- Corpus quality > model. Bad chunking (section/sub-clause boundaries) → wrong cite. Chunk by legal unit, keep section ID metadata.
+- LLM API latency/rate limit at demo → cache, stream tokens, fallback model.
+- Translation round trip adds latency and legal-term drift → keep statute names in English inside translated answer.
+- Stale law: version-tag every chunk with source URL + fetch date.
+
+## 15. Scalability
+Demo: ~50 concurrent, ~1 req/min each ≈ 1 RPS. Trivial. Production 20k registered → ~10% active → few RPS. Monolith enough.
+
+## 17. Security/Legal
+Prompt injection via corpus/user text; strip, never let retrieved text alter system rules. Disclaimer always. Legal accuracy risk highest: **get one IP-law or Ayurveda-regulatory domain reviewer** to validate golden set. I am not lawyer; corpus content and any statute-in-force claims must be verified against India Code. Example: check WIPO GRATK in-force status before stating it binds anyone.
+
+## 20. Testing = your edge
+- Golden set 100-150 Qs: 60% answerable, 20% jurisdiction-trap, 20% out-of-scope/trick ("is my formula patentable?" needs facts).
+- Metrics: answer correctness, citation precision (cited chunk supports claim), citation recall, abstention rate on unanswerable, jurisdiction leak rate (India law in intl lane), per-language quality on 20 Qs × 3 languages.
+- Baseline: same Qs to plain LLM, no RAG. Show delta on slide.
+
+## 21-23. Pros/Cons/Feasibility/Innovation
+Pros: clear user, open corpus, measurable. Cons: crowded, legal-accuracy burden, Bhashini dependency. Mitigation: eval numbers + narrow-but-correct corpus.
+Innovation (honest): citation verifier + published eval + abstention. Not "multi-agent".
+
+| Area | Score |
+|---|---:|
+| Problem clarity | 8 |
+| User value | 8 |
+| Innovation | 4 |
+| Competition | 3 |
+| Technical feasibility | 8 |
+| Demo feasibility | 8 |
+| Data availability | 7 |
+| Time feasibility | 7 |
+| Scalability | 7 |
+| Judge impact | 6 |
+
+Class: 🟡 Possible. Reduce scope, sharpen differentiation.
+
+## 24. Metrics
+Target example (set after baseline): citation precision ≥90%, jurisdiction leak 0 on test set, abstain correctly ≥85% on unanswerable, classifier accuracy on 30 case vignettes.
+
+## 25. MVP
+Corpus: Patents Act + 2024 Rules (§3(p), §3(d), §3(e)), BD Act 2023 + 2024 Rules, D&C Act ASU provisions, Drugs & Magic Remedies Act, TRIPS 27.3(b), Nagoya, WIPO GRATK, PCT basics. ~20-30 docs, well chunked. Plus classifier, two lanes, verifier, 3 languages (English, Hindi, Gujarati), eval dashboard.
+
+## 26. Future
+Knowledge graph (statute ↔ form ↔ authority), paid-source connectors with logged consent, voice, export-market herbal regimes, human facilitator inbox.
+
+## 27. Verdict
+### 🟡 BUILD WITH CHANGES
+Build it, but do not compete on feature count. Cut graph, agents, fake TKDL search. Win on: verified citations, honest abstention, published eval numbers, clean lane separation, domain-expert-checked corpus. Demo story: same tricky question to plain LLM (wrong section, mixed jurisdiction) vs yours (correct, cited, abstains on missing facts).
+
+**Open unknowns (risk):** team size/time left? Bhashini access confirmed? Domain reviewer available? If no reviewer, accuracy claims weak; get one.
