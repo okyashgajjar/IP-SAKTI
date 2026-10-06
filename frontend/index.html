@@ -24,17 +24,22 @@
 
         .main{display:flex;flex:1;overflow:hidden}
 
-        .sidebar{width:260px;background:var(--bg2);border-right:1px solid var(--border);padding:16px;display:flex;flex-direction:column;flex-shrink:0}
-        .sidebar-title{font-size:11px;font-weight:600;color:var(--t3);letter-spacing:1px;text-transform:uppercase;margin-bottom:12px}
-        .src{display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--card);border-radius:10px;margin-bottom:6px;font-size:13px;font-weight:500;border:1px solid transparent;transition:.2s}
-        .src:hover{border-color:var(--accent);background:rgba(99,102,241,.08)}
-        .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
-        .d1{background:#3b82f6}.d2{background:#22c55e}.d3{background:#f59e0b}.d4{background:#a855f7}.d5{background:#ef4444}
-
-        .jtoggle{margin-top:auto;padding:12px;background:var(--card);border-radius:12px;border:1px solid var(--border)}
-        .jtoggle label{font-size:11px;color:var(--t3);font-weight:600;letter-spacing:.5px;text-transform:uppercase;display:block;margin-bottom:8px}
+        .sidebar{width:260px;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
+        .new-chat-btn{display:flex;align-items:center;gap:12px;padding:16px;font-weight:500;font-size:14px;color:var(--t1);cursor:pointer;transition:.2s;border-bottom:1px solid var(--border)}
+        .new-chat-btn:hover{background:rgba(255,255,255,.05)}
+        .sessions-list{flex:1;overflow-y:auto;padding:12px 8px}
+        .sessions-list::-webkit-scrollbar{width:4px}
+        .sessions-list::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+        .sidebar-title{font-size:11px;font-weight:600;color:var(--t3);padding:0 8px 8px;letter-spacing:.5px;text-transform:uppercase}
+        .session-item{padding:10px 12px;font-size:13px;color:var(--t2);cursor:pointer;border-radius:8px;transition:.2s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:2px}
+        .session-item:hover{background:rgba(255,255,255,.05);color:var(--t1)}
+        .session-item.active{background:var(--card);color:var(--t1);font-weight:500}
+        
+        .sidebar-footer{padding:16px;border-top:1px solid var(--border)}
+        .jtoggle{background:var(--card);padding:10px;border-radius:10px;border:1px solid var(--border)}
+        .jtoggle label{font-size:11px;color:var(--t3);font-weight:600;display:block;margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px}
         .tg{display:flex;gap:4px}
-        .tb{flex:1;padding:8px;background:0;border:1px solid var(--border);border-radius:8px;color:var(--t2);font-size:12px;font-weight:500;cursor:pointer;transition:.2s;font-family:inherit}
+        .tb{flex:1;padding:6px;background:0;border:1px solid var(--border);border-radius:6px;color:var(--t2);font-size:11px;font-weight:500;cursor:pointer;transition:.2s;font-family:inherit}
         .tb.on{background:var(--accent);border-color:var(--accent);color:#fff}
 
         .chat-wrap{flex:1;display:flex;flex-direction:column;overflow:hidden}
@@ -57,7 +62,7 @@
         .av{width:32px;height:32px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0}
         .user .av{background:var(--accent)}
         .bot .av{background:var(--card);border:1px solid var(--border)}
-        .bubble{padding:12px 16px;border-radius:16px;font-size:14px;line-height:1.65;word-wrap:break-word}
+        .bubble{padding:12px 16px;border-radius:16px;font-size:14px;line-height:1.65;word-wrap:break-word;width:100%}
         .user .bubble{background:var(--accent);border-bottom-right-radius:4px}
         .bot .bubble{background:#1e293b;border:1px solid var(--border);border-bottom-left-radius:4px}
         .bot .bubble h3{font-size:15px;color:var(--accent2);margin:12px 0 6px}
@@ -105,34 +110,30 @@
 
     <div class="main">
         <aside class="sidebar">
-            <div class="sidebar-title">Data Sources</div>
-            <div class="src"><span class="dot d1"></span>India Code</div>
-            <div class="src"><span class="dot d2"></span>AYUSH Ministry</div>
-            <div class="src"><span class="dot d3"></span>FSSAI</div>
-            <div class="src"><span class="dot d4"></span>NBA (ABS)</div>
-            <div class="src"><span class="dot d5"></span>WIPO Lex</div>
-            <div class="jtoggle">
-                <label>Jurisdiction Lane</label>
-                <div class="tg">
-                    <button class="tb on" onclick="setJ('IN',this)">🇮🇳 India</button>
-                    <button class="tb" onclick="setJ('INTL',this)">🌐 International</button>
+            <div class="new-chat-btn" onclick="newChat()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+                New chat
+            </div>
+            
+            <div class="sessions-list" id="sessions-list">
+                <div class="sidebar-title">Recents</div>
+                <!-- Sessions will be loaded here -->
+            </div>
+
+            <div class="sidebar-footer">
+                <div class="jtoggle">
+                    <label>Jurisdiction Lane</label>
+                    <div class="tg">
+                        <button class="tb on" onclick="setJ('IN',this)">🇮🇳 India</button>
+                        <button class="tb" onclick="setJ('INTL',this)">🌐 Intl.</button>
+                    </div>
                 </div>
             </div>
         </aside>
 
         <div class="chat-wrap">
             <div class="msgs" id="msgs">
-                <div class="welcome" id="welcome">
-                    <div class="welcome-icon">🌿</div>
-                    <h2>Ayurveda IP Advisor</h2>
-                    <p>Get AI-powered guidance on Ayurveda intellectual property, drug regulations, and Access &amp; Benefit Sharing. Every claim is backed by statute citations.</p>
-                    <div class="examples">
-                        <button class="eq" onclick="ex(this)">Is my Ashwagandha beverage an Ayurveda Aahara or a drug?</button>
-                        <button class="eq" onclick="ex(this)">Can I patent a classical Ayurvedic formulation?</button>
-                        <button class="eq" onclick="ex(this)">What ABS compliance do I need for neem-based products?</button>
-                        <button class="eq" onclick="ex(this)">How do I protect my proprietary ASU drug IP internationally?</button>
-                    </div>
-                </div>
+                <!-- Welcome screen or messages -->
             </div>
             <div class="inp-area">
                 <div class="inp-wrap">
@@ -144,32 +145,51 @@
         </div>
     </div>
 
+    <!-- Hidden welcome template -->
+    <template id="welcome-template">
+        <div class="welcome" id="welcome">
+            <div class="welcome-icon">🌿</div>
+            <h2>Ayurveda IP Advisor</h2>
+            <p>Get AI-powered guidance on Ayurveda intellectual property, drug regulations, and Access &amp; Benefit Sharing. Every claim is backed by statute citations.</p>
+            <div class="examples">
+                <button class="eq" onclick="ex(this)">Is my Ashwagandha beverage an Ayurveda Aahara or a drug?</button>
+                <button class="eq" onclick="ex(this)">Can I patent a classical Ayurvedic formulation?</button>
+                <button class="eq" onclick="ex(this)">What ABS compliance do I need for neem-based products?</button>
+                <button class="eq" onclick="ex(this)">How do I protect my proprietary ASU drug IP internationally?</button>
+            </div>
+        </div>
+    </template>
+
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script>
         const S={sid:crypto.randomUUID(),hist:[],j:'IN',loading:false};
-        const msgs=document.getElementById('msgs'),qi=document.getElementById('qi'),sb=document.getElementById('sb'),welcome=document.getElementById('welcome');
+        const msgs=document.getElementById('msgs');
+        const qi=document.getElementById('qi');
+        const sb=document.getElementById('sb');
+        const sessionsList=document.getElementById('sessions-list');
+        const welcomeHtml = document.getElementById('welcome-template').innerHTML;
+
+        // Initialize
+        msgs.innerHTML = welcomeHtml;
+        loadSessions();
 
         function setJ(j,b){S.j=j;document.querySelectorAll('.tb').forEach(x=>x.classList.remove('on'));b.classList.add('on')}
         function ex(b){qi.value=b.textContent;send()}
         qi.addEventListener('keydown',e=>{if(e.key==='Enter'&&!S.loading)send()});
 
         function md(t){
-            return t.replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')
-                .replace(/\*(.*?)\*/g,'<em>$1</em>')
-                .replace(/`(.*?)`/g,'<code>$1</code>')
-                .replace(/^### (.*$)/gm,'<h3>$1</h3>')
-                .replace(/^## (.*$)/gm,'<h2>$1</h2>')
-                .replace(/^- (.*$)/gm,'<li>$1</li>')
-                .replace(/(<li>.*<\/li>)/gs,'<ul>$1</ul>')
-                .replace(/\n\n/g,'<br><br>')
-                .replace(/\n/g,'<br>');
+            return marked.parse(t);
         }
 
         function addMsg(role,content,meta){
-            if(welcome)welcome.remove();
+            const w=document.getElementById('welcome');
+            if(w) w.remove();
+            
             const m=document.createElement('div');m.className='msg '+role;
             const av=document.createElement('div');av.className='av';av.textContent=role==='user'?'👤':'🌿';
             const bb=document.createElement('div');bb.className='bubble';
             bb.innerHTML=role==='bot'?md(content):content;
+            
             if(role==='bot'&&meta){
                 const mb=document.createElement('div');mb.className='meta';
                 if(meta.sources_queried)meta.sources_queried.forEach(s=>{const c=document.createElement('span');c.className='chip cs';c.textContent=s;mb.appendChild(c)});
@@ -190,15 +210,92 @@
         async function send(){
             const q=qi.value.trim();if(!q||S.loading)return;
             S.loading=true;sb.disabled=true;qi.value='';
-            addMsg('user',q);S.hist.push({role:'user',content:q});
+            addMsg('user',q);
+            S.hist.push({role:'user',content:q});
             showThink();
+            
             try{
-                const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:q,session_id:S.sid,chat_history:S.hist.slice(-6)})});
-                const d=await r.json();hideThink();
-                if(r.ok){addMsg('bot',d.answer,d.metadata);S.hist.push({role:'assistant',content:d.answer})}
+                const r=await fetch('/api/chat',{
+                    method:'POST',
+                    headers:{'Content-Type':'application/json'},
+                    body:JSON.stringify({
+                        query:q,
+                        session_id:S.sid,
+                        chat_history:S.hist.slice(-6)
+                    })
+                });
+                const d=await r.json();
+                hideThink();
+                if(r.ok){
+                    addMsg('bot',d.answer,d.metadata);
+                    S.hist.push({role:'assistant',content:d.answer});
+                    // Reload sessions to update title if it's the first message
+                    if(S.hist.length <= 2) loadSessions();
+                }
                 else addMsg('bot','⚠️ Error: '+(d.error||'Something went wrong.'));
-            }catch(err){hideThink();addMsg('bot','⚠️ Connection error: '+err.message)}
+            }catch(err){
+                hideThink();
+                addMsg('bot','⚠️ Connection error: '+err.message);
+            }
             S.loading=false;sb.disabled=false;qi.focus();
+        }
+
+        // --- Session Management ---
+        async function loadSessions() {
+            try {
+                const res = await fetch('/api/sessions');
+                const data = await res.json();
+                
+                sessionsList.innerHTML = '<div class="sidebar-title">Recents</div>';
+                if(data.sessions && data.sessions.length > 0) {
+                    data.sessions.forEach(sess => {
+                        const div = document.createElement('div');
+                        div.className = 'session-item' + (sess.id === S.sid ? ' active' : '');
+                        div.textContent = sess.title || 'New Chat';
+                        div.dataset.sid = sess.id;
+                        div.onclick = () => loadChat(sess.id);
+                        sessionsList.appendChild(div);
+                    });
+                }
+            } catch (err) {
+                console.error("Failed to load sessions", err);
+            }
+        }
+
+        function newChat() {
+            S.sid = crypto.randomUUID();
+            S.hist = [];
+            msgs.innerHTML = welcomeHtml;
+            document.querySelectorAll('.session-item').forEach(el => el.classList.remove('active'));
+        }
+
+        async function loadChat(sid) {
+            if(S.loading) return;
+            S.sid = sid;
+            S.hist = [];
+            msgs.innerHTML = '';
+            
+            // Update UI active state immediately
+            document.querySelectorAll('.session-item').forEach(el => {
+                el.classList.toggle('active', el.dataset.sid === sid);
+            });
+
+            try {
+                const res = await fetch(`/api/chat/${sid}`);
+                const data = await res.json();
+                
+                if(data.history && data.history.length > 0) {
+                    data.history.forEach(msg => {
+                        S.hist.push({role: msg.role, content: msg.content});
+                        addMsg(msg.role, msg.content);
+                    });
+                } else {
+                    msgs.innerHTML = welcomeHtml;
+                }
+            } catch (err) {
+                console.error("Failed to load chat history", err);
+                msgs.innerHTML = '<div style="padding:20px;color:red;">Error loading chat history.</div>';
+            }
         }
     </script>
 </body>

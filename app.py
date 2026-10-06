@@ -108,6 +108,18 @@ async def chat_endpoint(request: Request):
         )
 
 
+@app.get("/api/sessions")
+async def api_get_sessions():
+    """Get all chat sessions."""
+    return JSONResponse(content={"sessions": db.get_sessions()})
+
+
+@app.get("/api/chat/{session_id}")
+async def api_get_chat_history(session_id: str):
+    """Get chat history for a session."""
+    return JSONResponse(content={"history": db.get_chat_history(session_id)})
+
+
 @app.get("/api/health")
 async def health():
     """Health check endpoint."""
