@@ -60,3 +60,7 @@ coverage.xml
 *.py,cover
 .hypothesis/
 lint_report.txt
+
+# Custom
+.mycli-fts/
+docs/.~lock.*
