@@ -3,7 +3,7 @@ LangGraph Orchestrator - Graph Builder.
 Compiles the full multi-agent pipeline from nodes.
 
 Architecture flow:
-  input_language → query_understanding → research_planner
+  input_language → query_understanding → research_planner (plan + queries)
   → evidence_retrieval → evidence_reasoner → citation_validator
   → confidence_assessor → answer_synthesis → END
 """

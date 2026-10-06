@@ -19,6 +19,8 @@ class OrchestratorState(TypedDict):
 
     # ── Task Queue State ──
     sources_to_query: list[str]  # ["AYUSH", "FSSAI", "INDIA_CODE", ...]
+    research_plan: str
+    research_queue: dict[str, list[str]]  # {"INDIA_CODE": ["patent act", "section 3"], ...}
 
     # ── Evidence Store ──
     evidence: list[dict]  # [{source, text, metadata}, ...]

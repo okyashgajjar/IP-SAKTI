@@ -39,6 +39,11 @@ from TOOLS.fssai_adapter import FssaiRetrievalAdapter
 from TOOLS.indiacode_adapter import IndiaCodeRetrievalAdapter
 from TOOLS.nba_adapter import NbaRetrievalAdapter
 from TOOLS.wipolex_adapter import WipoLexRetrievalAdapter
+from TOOLS.embedding_store import EmbeddingStore
+
+
+# ── Singletons ──
+embed_store = EmbeddingStore(os.getenv("EMBEDDINGS_DB_PATH", "embeddings.db"))
 
 
 # ── Adapter Registry (SOLID: Open/Closed) ──
@@ -150,56 +155,183 @@ Rules:
 
 
 # ───────────────────────────────────────────────
-# Node 3: Research Planner (pass-through)
-# Sources already decided by query_understanding
+# Node 3: Research Planner + Query Compiler
+# Single LLM call: decides WHAT to retrieve AND
+# compiles source-specific queries in one shot.
 # ───────────────────────────────────────────────
 def research_planner_node(state: OrchestratorState) -> dict:
-    """Validate and finalize the task queue of sources."""
+    """Plan research objectives and compile source-specific queries in one LLM call."""
+    log_node(3, "Research Planner", "planning + compiling queries...")
+    llm = get_llm()
+    query = state.get("user_query", "")
     sources = state.get("sources_to_query", [])
-    valid = [s for s in sources if s in ADAPTER_REGISTRY]
-    if not valid:
-        valid = ["INDIA_CODE"]
-    log_node(3, "Research Planner", f"querying → {valid}")
-    return {"sources_to_query": valid}
+    valid_sources = [s for s in sources if s in ADAPTER_REGISTRY]
+    if not valid_sources:
+        valid_sources = ["INDIA_CODE"]
+
+    prompt = f"""You are the Research Planner for an Ayurveda IP Advisor.
+Your job is to decide WHAT evidence is needed and produce source-specific retrieval queries.
+Do NOT interpret the law or generate conclusions.
+
+User query: "{query}"
+Target sources: {valid_sources}
+
+Source descriptions (use these to write better queries):
+- AYUSH: Ayurveda regulations, AYUSH ministry schemes, drug licensing guidelines
+- FSSAI: Food safety, Ayurveda Aahara, labeling, permitted ingredients
+- INDIA_CODE: Indian Acts & Sections (Patents Act, Drugs Act, BD Act, etc.)
+- NBA: Access & Benefit Sharing, biodiversity, biological resources
+- WIPO_LEX: International IP treaties, patents abroad, traditional knowledge
+
+Return ONLY valid JSON in this exact format:
+{{
+  "plan": [
+    "SOURCE_A: what needs to be retrieved from this source",
+    "SOURCE_B: what needs to be retrieved from this source"
+  ],
+  "queries": {{
+    "SOURCE_A": ["short search query 1", "short search query 2"],
+    "SOURCE_B": ["short search query 1"]
+  }}
+}}
+
+Rules:
+- Plan: 1 bullet per source (max 4). Each states the research objective.
+- Queries: 1-3 short keyword phrases per source, optimized for search/API retrieval.
+  e.g. "section 3(p) patents act 1970", "ayurveda aahara FSSAI 2022 regulations"
+- Only include sources from the Target sources list.
+- Return ONLY the JSON, no explanation.
+"""
+
+    response = llm.invoke(prompt)
+    content = response.content.strip()
+
+    try:
+        if "```" in content:
+            content = content.split("```")[1]
+            if content.startswith("json"):
+                content = content[4:]
+        parsed = json.loads(content.strip())
+    except Exception:
+        # Fallback: use raw query for each source
+        parsed = {
+            "plan": [f"{s}: retrieve relevant provisions" for s in valid_sources],
+            "queries": {s: [query] for s in valid_sources},
+        }
+
+    plan_list = parsed.get("plan", [])
+    queue = parsed.get("queries", {s: [query] for s in valid_sources})
+    plan_text = "\n".join(f"  {i+1}. {p}" for i, p in enumerate(plan_list))
+
+    log_node(3, "Research Planner", f"plan ready ({len(plan_list)} objectives)")
+    print(f"  📋  PLAN:\n{plan_text}", flush=True)
+    print(f"  🔎  QUERIES: {json.dumps(queue, indent=2)}", flush=True)
+
+    return {
+        "sources_to_query": valid_sources,
+        "research_plan": "\n".join(plan_list),
+        "research_queue": queue,
+    }
 
 
 # ───────────────────────────────────────────────
-# Node 4: Evidence Retrieval (Deterministic Tools)
+# Node 4: Evidence Retrieval (3-Layer)
+#   Layer 1 → History embeddings (past conversations)
+#   Layer 2 → Evidence embeddings (past retrieved docs)
+#   Layer 3 → Fresh source retrieval (live adapters)
 # ───────────────────────────────────────────────
 def evidence_retrieval_node(state: OrchestratorState) -> dict:
-    """Call each adapter in the task queue and collect evidence."""
-    log_node(4, "Evidence Retrieval", "calling adapters...")
-    sources = state.get("sources_to_query", [])
-    query = state.get("user_query", "")
+    """3-layer retrieval: history → cached evidence → fresh scraping."""
+    log_node(4, "Evidence Retrieval", "3-layer retrieval starting...")
+    queue = state.get("research_queue", {})
     jurisdiction = state.get("jurisdiction", "IN")
+    session_id = state.get("session_id", "")
+    user_query = state.get("user_query", "")
 
     evidence_list = []
-    for source_name in sources:
+
+    # ── Layer 1: History Embeddings ──
+    # Search past chat history for relevant context
+    print("    📜 Layer 1: Searching history embeddings...", flush=True)
+    try:
+        hist_results = embed_store.search_history(user_query, top_k=3)
+        for h in hist_results:
+            evidence_list.append({
+                "source": f"HISTORY (session: {h['session_id'][:8]})",
+                "text": h["content"],
+                "status": "ok",
+                "documents": [],
+                "error": "",
+                "retrieval_layer": "history_embedding",
+                "similarity_score": h["score"],
+            })
+        print(f"    📜 Layer 1: Found {len(hist_results)} relevant history items", flush=True)
+    except Exception as e:
+        print(f"    ⚠️  Layer 1 error: {e}", flush=True)
+
+    # ── Layer 2: Evidence Embeddings ──
+    # Search past retrieved evidence for reuse
+    print("    📦 Layer 2: Searching evidence embeddings...", flush=True)
+    try:
+        evid_results = embed_store.search_evidence(user_query, top_k=5)
+        for ev in evid_results:
+            evidence_list.append({
+                "source": f"CACHED_{ev['source']}",
+                "text": ev["content"],
+                "status": "ok",
+                "documents": [],
+                "error": "",
+                "retrieval_layer": "evidence_embedding",
+                "similarity_score": ev["score"],
+            })
+        print(f"    📦 Layer 2: Found {len(evid_results)} cached evidence items", flush=True)
+    except Exception as e:
+        print(f"    ⚠️  Layer 2 error: {e}", flush=True)
+
+    # ── Layer 3: Fresh Source Retrieval ──
+    # Live scraping from adapters using the research queue
+    print("    🌐 Layer 3: Fresh source retrieval...", flush=True)
+    fresh_count = 0
+    for source_name, queries in queue.items():
         adapter = ADAPTER_REGISTRY.get(source_name)
         if adapter:
-            try:
-                result = adapter.retrieve(query, jurisdiction)
-                # result is now a RetrievalResult dict with keys:
-                # source, query, jurisdiction, status, documents, text, error
-                evidence_list.append({
-                    "source": result.get("source", source_name),
-                    "text": result.get("text", ""),
-                    "status": result.get("status", "ok"),
-                    "documents": result.get("documents", []),
-                    "error": result.get("error", ""),
-                })
-            except Exception as e:
-                evidence_list.append({
-                    "source": source_name,
-                    "text": f"Retrieval failed: {str(e)}",
-                    "status": "error",
-                    "documents": [],
-                    "error": str(e),
-                })
+            for q in queries:
+                try:
+                    result = adapter.retrieve(q, jurisdiction)
+                    text = result.get("text", "")
+                    evidence_list.append({
+                        "source": result.get("source", source_name),
+                        "text": f"Query [{q}]: {text}",
+                        "status": result.get("status", "ok"),
+                        "documents": result.get("documents", []),
+                        "error": result.get("error", ""),
+                        "retrieval_layer": "fresh",
+                    })
+                    # Store fresh evidence as embedding for future reuse
+                    if text and session_id:
+                        embed_store.store_evidence(session_id, source_name, f"Query [{q}]: {text}")
+                    fresh_count += 1
+                except Exception as e:
+                    evidence_list.append({
+                        "source": source_name,
+                        "text": f"Retrieval failed for query '{q}': {str(e)}",
+                        "status": "error",
+                        "documents": [],
+                        "error": str(e),
+                        "retrieval_layer": "fresh",
+                    })
+    print(f"    🌐 Layer 3: {fresh_count} fresh retrievals executed", flush=True)
 
-    ok = sum(1 for e in evidence_list if e['status'] in ('ok', 'partial'))
+    # ── Summary ──
+    ok = sum(1 for e in evidence_list if e.get('status') in ('ok', 'partial'))
+    by_layer = {}
+    for e in evidence_list:
+        layer = e.get("retrieval_layer", "unknown")
+        by_layer[layer] = by_layer.get(layer, 0) + 1
+    layer_summary = ", ".join(f"{k}: {v}" for k, v in by_layer.items())
+
     log_node(4, "Evidence Retrieval",
-             f"{ok}/{len(evidence_list)} sources returned OK")
+             f"{ok}/{len(evidence_list)} OK | Layers: {layer_summary}")
     return {"evidence": evidence_list}
 
 

@@ -5,6 +5,7 @@ Stateless API exposing the LangGraph orchestrator over HTTP + SSE.
 import os
 import sys
 import uuid
+import uvicorn
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -18,6 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from AGENTS.graph import orchestrator
 from TOOLS.db_client import LocalDBClient
+from TOOLS.embedding_store import EmbeddingStore
 
 app = FastAPI(title="Ayurveda IP Advisor", version="1.0.0")
 
@@ -29,6 +31,7 @@ app.mount(
 )
 
 db = LocalDBClient(os.getenv("DB_PATH", "database.db"))
+embed_store = EmbeddingStore(os.getenv("EMBEDDINGS_DB_PATH", "embeddings.db"))
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -55,8 +58,9 @@ async def chat_endpoint(request: Request):
             content={"error": "Query cannot be empty."},
         )
 
-    # Save user message to DB
+    # Save user message to DB + embed for history layer
     db.save_chat_message(session_id, "user", user_query)
+    embed_store.store_chat_message(session_id, "user", user_query)
 
     # Build initial state for LangGraph
     initial_state = {
@@ -69,6 +73,8 @@ async def chat_endpoint(request: Request):
         "jurisdiction": "IN",
         "product_classification": "unknown",
         "sources_to_query": [],
+        "research_plan": "",
+        "research_queue": {},
         "evidence": [],
         "findings": "",
         "citations_valid": False,
@@ -84,8 +90,9 @@ async def chat_endpoint(request: Request):
 
         final_answer = result.get("final_answer", "No answer generated.")
 
-        # Save assistant response to DB
+        # Save assistant response to DB + embed for history layer
         db.save_chat_message(session_id, "assistant", final_answer)
+        embed_store.store_chat_message(session_id, "assistant", final_answer)
 
         return JSONResponse(content={
             "answer": final_answer,
@@ -127,7 +134,6 @@ async def health():
 
 
 if __name__ == "__main__":
-    import uvicorn
     uvicorn.run(
         "app:app",
         host=os.getenv("APP_HOST", "0.0.0.0"),
