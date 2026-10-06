@@ -179,19 +179,25 @@ def evidence_retrieval_node(state: OrchestratorState) -> dict:
         if adapter:
             try:
                 result = adapter.retrieve(query, jurisdiction)
+                # result is now a RetrievalResult dict with keys:
+                # source, query, jurisdiction, status, documents, text, error
                 evidence_list.append({
-                    "source": source_name,
-                    "text": result,
-                    "status": "ok",
+                    "source": result.get("source", source_name),
+                    "text": result.get("text", ""),
+                    "status": result.get("status", "ok"),
+                    "documents": result.get("documents", []),
+                    "error": result.get("error", ""),
                 })
             except Exception as e:
                 evidence_list.append({
                     "source": source_name,
                     "text": f"Retrieval failed: {str(e)}",
                     "status": "error",
+                    "documents": [],
+                    "error": str(e),
                 })
 
-    ok = sum(1 for e in evidence_list if e['status'] == 'ok')
+    ok = sum(1 for e in evidence_list if e['status'] in ('ok', 'partial'))
     log_node(4, "Evidence Retrieval",
              f"{ok}/{len(evidence_list)} sources returned OK")
     return {"evidence": evidence_list}

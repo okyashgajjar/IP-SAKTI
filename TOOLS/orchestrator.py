@@ -1,5 +1,10 @@
-from typing import TypedDict, Annotated, Sequence
-import operator
+"""
+Tool Orchestrator — LangGraph-based retrieval routing.
+
+Routes queries to the appropriate data-source adapter and returns
+standardized ``RetrievalResult`` evidence dicts.
+"""
+from typing import TypedDict
 from langgraph.graph import StateGraph, END
 from .ayush_adapter import AyushRetrievalAdapter
 from .fssai_adapter import FssaiRetrievalAdapter
@@ -11,7 +16,7 @@ class AgentState(TypedDict):
     query: str
     jurisdiction: str
     source: str
-    evidence: str
+    evidence: dict  # Changed from str → dict (RetrievalResult)
 
 def retrieve_node(state: AgentState):
     source = state.get("source")
@@ -30,7 +35,15 @@ def retrieve_node(state: AgentState):
     if adapter:
         evidence = adapter.retrieve(query, jurisdiction)
     else:
-        evidence = f"Source {source} not supported."
+        evidence = {
+            "source": source or "UNKNOWN",
+            "query": query,
+            "jurisdiction": jurisdiction,
+            "status": "error",
+            "documents": [],
+            "text": f"Source '{source}' not supported.",
+            "error": f"Source '{source}' not supported.",
+        }
         
     return {"evidence": evidence}
 
