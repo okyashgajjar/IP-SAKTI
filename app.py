@@ -18,8 +18,7 @@ load_dotenv()
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from AGENTS.graph import orchestrator
-from TOOLS.db_client import LocalDBClient
-from TOOLS.embedding_store import EmbeddingStore
+from TOOLS.db_client import PostgresDBClient
 
 app = FastAPI(title="Ayurveda IP Advisor", version="1.0.0")
 
@@ -30,8 +29,7 @@ app.mount(
     name="static",
 )
 
-db = LocalDBClient(os.getenv("DB_PATH", "database.db"))
-embed_store = EmbeddingStore(os.getenv("EMBEDDINGS_DB_PATH", "embeddings.db"))
+db = PostgresDBClient(os.getenv("DB_URL", "postgresql://postgres:postgres@localhost:5432/ayurveda_ip"))
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -60,7 +58,7 @@ async def chat_endpoint(request: Request):
 
     # Save user message to DB + embed for history layer
     db.save_chat_message(session_id, "user", user_query)
-    embed_store.store_chat_message(session_id, "user", user_query)
+    db.store_chat_message_embed(session_id, "user", user_query)
 
     # Build initial state for LangGraph
     initial_state = {
@@ -92,7 +90,7 @@ async def chat_endpoint(request: Request):
 
         # Save assistant response to DB + embed for history layer
         db.save_chat_message(session_id, "assistant", final_answer)
-        embed_store.store_chat_message(session_id, "assistant", final_answer)
+        db.store_chat_message_embed(session_id, "assistant", final_answer)
 
         return JSONResponse(content={
             "answer": final_answer,

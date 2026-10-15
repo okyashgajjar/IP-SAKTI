@@ -39,11 +39,10 @@ from TOOLS.fssai_adapter import FssaiRetrievalAdapter
 from TOOLS.indiacode_adapter import IndiaCodeRetrievalAdapter
 from TOOLS.nba_adapter import NbaRetrievalAdapter
 from TOOLS.wipolex_adapter import WipoLexRetrievalAdapter
-from TOOLS.embedding_store import EmbeddingStore
-
+from TOOLS.db_client import PostgresDBClient
 
 # ── Singletons ──
-embed_store = EmbeddingStore(os.getenv("EMBEDDINGS_DB_PATH", "embeddings.db"))
+db = PostgresDBClient(os.getenv("DB_URL", "postgresql://postgres:postgres@localhost:5432/ayurveda_ip"))
 
 
 # ── Adapter Registry (SOLID: Open/Closed) ──
@@ -254,7 +253,7 @@ def evidence_retrieval_node(state: OrchestratorState) -> dict:
     # Search past chat history for relevant context
     print("    📜 Layer 1: Searching history embeddings...", flush=True)
     try:
-        hist_results = embed_store.search_history(user_query, top_k=3)
+        hist_results = db.search_history(user_query, top_k=3)
         for h in hist_results:
             evidence_list.append({
                 "source": f"HISTORY (session: {h['session_id'][:8]})",
@@ -273,7 +272,7 @@ def evidence_retrieval_node(state: OrchestratorState) -> dict:
     # Search past retrieved evidence for reuse
     print("    📦 Layer 2: Searching evidence embeddings...", flush=True)
     try:
-        evid_results = embed_store.search_evidence(user_query, top_k=5)
+        evid_results = db.search_evidence(user_query, top_k=5)
         for ev in evid_results:
             evidence_list.append({
                 "source": f"CACHED_{ev['source']}",
@@ -309,7 +308,7 @@ def evidence_retrieval_node(state: OrchestratorState) -> dict:
                     })
                     # Store fresh evidence as embedding for future reuse
                     if text and session_id:
-                        embed_store.store_evidence(session_id, source_name, f"Query [{q}]: {text}")
+                        db.store_evidence_embed(session_id, source_name, f"Query [{q}]: {text}")
                     fresh_count += 1
                 except Exception as e:
                     evidence_list.append({
