@@ -1,15 +1,14 @@
 """
 AYUSH Ministry Retrieval Adapter — Playwright headless browser.
 
-Retrieves regulations and documents from https://ayush.gov.in/ which is an
-Angular Single Page Application. Standard HTTP requests return only the empty
-``<app-root></app-root>`` shell, so Playwright is required for DOM rendering.
+Retrieves regulations, guidelines, and documents from https://ayush.gov.in/
+which is an Angular Single Page Application.
 
-Key routes scraped:
-  /whatsnew        — Notifications & what's new
-  /ayurveda        — Ayurveda regulations & info
-  /qualitystandard — Quality standards
-  /schemes         — Government schemes
+Key content rendered on the main portal:
+  - Acts & Rules (NCISM Act, NCH Act, ITRA Act, etc.)
+  - What's New & Circulars (clinical guidelines, export advisories, notifications)
+  - Quality Standards (benchmark rates, annexures)
+  - National Schemes (Ayurswasthya, Ayurgyan, Drug Quality & Manufacturing)
 """
 import asyncio
 import logging
@@ -22,44 +21,19 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://ayush.gov.in"
 
-# Content routes documented in DATA_SOURCES/AYUSH/ayush_scraping_guide.md
-CONTENT_ROUTES = {
-    "whatsnew": {
-        "path": "/whatsnew",
-        "label": "Notifications & What's New",
-    },
-    "ayurveda": {
-        "path": "/ayurveda",
-        "label": "Ayurveda Regulations",
-    },
-    "qualitystandard": {
-        "path": "/qualitystandard",
-        "label": "Quality Standards",
-    },
-    "schemes": {
-        "path": "/schemes",
-        "label": "Schemes",
-    },
-    "tenders": {
-        "path": "/tenders",
-        "label": "Tenders",
-    },
+# Regulatory stop words to prevent false-positive matching
+STOP_WORDS = {
+    "the", "and", "for", "from", "with", "that", "this", "are",
+    "was", "has", "had", "have", "been", "not", "but", "its",
+    "all", "any", "can", "may", "will", "shall", "under", "into",
+    "ayush", "ministry", "government", "india", "indian", "what",
+    "how", "which", "about", "our", "per", "via",
 }
 
-# Mapping of query keywords to relevant routes
-KEYWORD_ROUTE_MAP = {
-    "notification": ["whatsnew"],
-    "new": ["whatsnew"],
-    "circular": ["whatsnew"],
-    "ayurveda": ["ayurveda", "qualitystandard"],
-    "regulation": ["ayurveda", "qualitystandard"],
-    "guideline": ["ayurveda", "qualitystandard"],
-    "quality": ["qualitystandard"],
-    "standard": ["qualitystandard"],
-    "scheme": ["schemes"],
-    "mission": ["schemes"],
-    "tender": ["tenders"],
-    "procurement": ["tenders"],
+# 60-second in-memory cache to avoid redundant browser launches for multi-query batches
+_PORTAL_CACHE = {
+    "data": None,
+    "timestamp": 0.0,
 }
 
 
@@ -67,7 +41,8 @@ class AyushRetrievalAdapter(RetrievalAdapter):
     """Retrieve AYUSH regulations via Playwright (Angular SPA scraping)."""
 
     SOURCE_NAME = "AYUSH"
-    PLAYWRIGHT_TIMEOUT = 30_000  # 30 seconds for Angular to render
+    PLAYWRIGHT_TIMEOUT = 15_000  # 15 seconds max (domcontentloaded)
+    MAX_RETRIES = 1             # Don't double timeout on slow gov servers
 
     # ── Public interface ─────────────────────────────────────
     def retrieve(self, query: str, jurisdiction: str) -> RetrievalResult:
@@ -79,42 +54,39 @@ class AyushRetrievalAdapter(RetrievalAdapter):
 
     # ── Internal logic ───────────────────────────────────────
     def _do_retrieve(self, query: str, jurisdiction: str) -> RetrievalResult:
-        """Determine relevant routes from the query, then scrape them."""
-        routes = self._select_routes(query)
-        # Run the async scraping in a sync context
+        """Scrape the AYUSH portal for documents and text matching the query."""
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             loop = None
 
         if loop and loop.is_running():
-            # We're inside an existing event loop (e.g. FastAPI)
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as pool:
                 result = pool.submit(
-                    asyncio.run, self._scrape_routes(routes, query)
-                ).result(timeout=60)
+                    asyncio.run, self._scrape_portal(query)
+                ).result(timeout=30)
         else:
-            result = asyncio.run(self._scrape_routes(routes, query))
+            result = asyncio.run(self._scrape_portal(query))
 
         documents, text_parts, errors = result
 
         if not documents and errors:
             return self._error(
                 query, jurisdiction,
-                f"All routes failed: {'; '.join(errors)}"
+                f"Portal scrape failed: {'; '.join(errors)}"
             )
 
         if not documents:
             return self._partial(
                 query, jurisdiction,
                 documents=[],
-                text=f"No documents found on AYUSH website for '{query}'.",
+                text=f"No matching documents found on AYUSH portal for '{query}'.",
                 error="No matching documents found",
             )
 
         summary = (
-            f"[AYUSH] Found {len(documents)} document(s) "
+            f"[AYUSH] Found {len(documents)} document(s) / reference(s) "
             f"related to '{query}':\n\n" + "\n\n".join(text_parts)
         )
 
@@ -125,117 +97,141 @@ class AyushRetrievalAdapter(RetrievalAdapter):
             )
         return self._ok(query, jurisdiction, documents, summary)
 
-    async def _scrape_routes(self, routes: list, query: str):
-        """Async: launch Playwright, scrape each route, return results."""
+    async def _scrape_portal(self, query: str):
+        """Async: load portal DOM (or use 60s cache), extract matching docs & text."""
+        import time
         from playwright.async_api import async_playwright
 
-        all_documents = []
-        all_text_parts = []
+        documents = []
+        text_parts = []
         errors = []
+        query_keywords = self._build_relevance_keywords(query)
 
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            try:
-                for route_key in routes:
-                    route = CONTENT_ROUTES[route_key]
-                    url = f"{BASE_URL}{route['path']}"
-                    label = route["label"]
-                    try:
-                        docs, texts = await self._scrape_single_page(
-                            browser, url, label, query
-                        )
-                        all_documents.extend(docs)
-                        all_text_parts.extend(texts)
-                    except Exception as exc:
-                        errors.append(f"{label}: {exc}")
-                        logger.warning("Failed to scrape %s: %s", url, exc)
-            finally:
-                await browser.close()
-
-        return all_documents, all_text_parts, errors
-
-    async def _scrape_single_page(self, browser, url: str,
-                                  section_label: str, query: str):
-        """Scrape a single Angular-rendered page for links and text."""
-        page = await browser.new_page()
-        try:
-            logger.info("Navigating to %s ...", url)
-            await page.goto(url, wait_until="networkidle",
-                            timeout=self.PLAYWRIGHT_TIMEOUT)
-
-            # Wait for Angular rendering
-            await page.wait_for_timeout(2000)
-
-            documents = []
-            text_parts = []
-
-            # Extract PDF links
-            pdf_links = await page.locator("a[href$='.pdf']").all()
-            for link in pdf_links:
+        # Check 60-second in-memory cache
+        now = time.time()
+        if _PORTAL_CACHE["data"] is not None and (now - _PORTAL_CACHE["timestamp"]) < 60:
+            data = _PORTAL_CACHE["data"]
+        else:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
                 try:
-                    title = (await link.inner_text()).strip()
-                    href = await link.get_attribute("href")
-                    if href:
-                        if href.startswith("/"):
-                            href = f"{BASE_URL}{href}"
-                        doc = {
-                            "title": title or self._title_from_url(href),
-                            "url": href,
-                            "type": "pdf",
-                            "section": section_label,
-                        }
-                        documents.append(doc)
-                        text_parts.append(
-                            f"- {doc['title']}\n  URL: {doc['url']}\n"
-                            f"  Section: {section_label}"
-                        )
-                except Exception:
-                    continue
+                    page = await browser.new_page()
+                    try:
+                        logger.info("Navigating to %s ...", BASE_URL)
+                        await page.goto(BASE_URL + "/", wait_until="domcontentloaded",
+                                        timeout=self.PLAYWRIGHT_TIMEOUT)
+                        await page.wait_for_timeout(2000)
 
-            # Extract page heading and body text for context
-            page_text = await page.locator("body").inner_text()
-            # Filter relevant snippets containing query keywords
-            query_words = [w.lower() for w in query.split() if len(w) > 2]
-            relevant_lines = []
-            for line in page_text.split("\n"):
-                line = line.strip()
-                if not line or len(line) < 10:
-                    continue
-                if any(w in line.lower() for w in query_words):
+                        data = await page.evaluate('''() => {
+                            const links = Array.from(document.querySelectorAll('a')).map(a => ({
+                                href: a.href || '',
+                                text: (a.innerText || '').trim().replace(/\\s+/g, ' ')
+                            }));
+                            const bodyText = document.body ? document.body.innerText : '';
+                            return { links, bodyText };
+                        }''')
+                        _PORTAL_CACHE["data"] = data
+                        _PORTAL_CACHE["timestamp"] = now
+                    except Exception as exc:
+                        errors.append(str(exc))
+                        logger.warning("AYUSH scraping failed: %s", exc)
+                        data = {"links": [], "bodyText": ""}
+                    finally:
+                        await page.close()
+                finally:
+                    await browser.close()
+
+        raw_links = data.get("links", [])
+        body_text = data.get("bodyText", "")
+
+        # ── 1. Document Extraction & Scoring ──
+        scored_docs = []
+        seen_urls = set()
+
+        for link in raw_links:
+            href = link.get("href", "")
+            title = link.get("text", "")
+            if not href or href in seen_urls:
+                continue
+
+            # Check if this link points to a document or regulatory page
+            href_lower = href.lower()
+            is_doc = any(ext in href_lower for ext in [
+                ".pdf", ".doc", ".docx", "/assets/pdf",
+                "/schemes", "/ayushinindiapublications",
+                "/ayushdomains", "ncism", "itra"
+            ])
+
+            if not is_doc:
+                continue
+
+            seen_urls.add(href)
+
+            # Fix relative URLs if any
+            if href.startswith("/"):
+                href = f"{BASE_URL}{href}"
+
+            # Score relevance
+            combined = f"{title} {href}".lower()
+            score = self._score_relevance(combined, title.lower(), query_keywords)
+            if score > 0:
+                clean_title = title or self._title_from_url(href)
+                scored_docs.append((score, {
+                    "title": clean_title,
+                    "url": href,
+                    "type": "pdf" if ".pdf" in href_lower else "web",
+                    "section": "AYUSH Official Portal",
+                }))
+
+        # Sort by score descending and take top 5
+        scored_docs.sort(key=lambda x: x[0], reverse=True)
+        for _, doc in scored_docs[:5]:
+            documents.append(doc)
+            text_parts.append(
+                f"- {doc['title']}\n  URL: {doc['url']}\n  Section: {doc['section']}"
+            )
+
+        # ── 2. Page Text Context Extraction ──
+        lines = [line.strip() for line in body_text.split("\n") if len(line.strip()) > 15]
+        relevant_lines = []
+        for line in lines:
+            if self._score_relevance(line.lower(), "", query_keywords) > 0:
+                if line not in relevant_lines:
                     relevant_lines.append(line)
 
-            if relevant_lines and not documents:
-                # No PDFs found but there is relevant text content
-                snippet = "\n".join(relevant_lines[:10])
-                text_parts.append(
-                    f"- Text content from {section_label}:\n  {snippet}"
-                )
+        if relevant_lines:
+            snippet = "\n".join(relevant_lines[:8])
+            text_parts.append(
+                f"- Context from AYUSH Portal:\n  {snippet}"
+            )
+            if not documents:
+                # If no direct file link matched, return text content
                 documents.append({
-                    "title": f"{section_label} — text content",
-                    "url": url,
+                    "title": "AYUSH Ministry Portal Announcements & Guidelines",
+                    "url": BASE_URL,
                     "type": "html",
-                    "section": section_label,
+                    "section": "AYUSH Official Portal",
                     "snippet": snippet[:500],
                 })
 
-            return documents, text_parts
-        finally:
-            await page.close()
+        return documents, text_parts, errors
 
-    def _select_routes(self, query: str) -> list:
-        """Pick the most relevant routes based on query keywords."""
-        query_lower = query.lower()
-        matched_routes = set()
+    @classmethod
+    def _build_relevance_keywords(cls, query: str) -> list[str]:
+        """Extract meaningful keywords from query for relevance matching."""
+        words = re.split(r"[\s/,\-()]+", query.lower())
+        return [w for w in words if len(w) > 2 and w not in STOP_WORDS]
 
-        for keyword, routes in KEYWORD_ROUTE_MAP.items():
-            if keyword in query_lower:
-                matched_routes.update(routes)
-
-        # Default: scrape the two most general pages
-        if not matched_routes:
-            matched_routes = {"whatsnew", "ayurveda"}
-
-        return list(matched_routes)[:3]  # Cap at 3 routes
+    @staticmethod
+    def _score_relevance(text: str, title: str, keywords: list[str]) -> int:
+        """Calculate relevance score based on keyword matches."""
+        score = 0
+        for kw in keywords:
+            if kw in title:
+                score += 3  # Higher weight for title match
+            elif kw in text:
+                score += 1
+        return score
 
     @staticmethod
     def _title_from_url(url: str) -> str:

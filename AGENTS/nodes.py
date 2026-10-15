@@ -175,12 +175,12 @@ Do NOT interpret the law or generate conclusions.
 User query: "{query}"
 Target sources: {valid_sources}
 
-Source descriptions (use these to write better queries):
-- AYUSH: Ayurveda regulations, AYUSH ministry schemes, drug licensing guidelines
-- FSSAI: Food safety, Ayurveda Aahara, labeling, permitted ingredients
-- INDIA_CODE: Indian Acts & Sections (Patents Act, Drugs Act, BD Act, etc.)
-- NBA: Access & Benefit Sharing, biodiversity, biological resources
-- WIPO_LEX: International IP treaties, patents abroad, traditional knowledge
+Source query conventions:
+- INDIA_CODE: Official Act / Statute name ONLY (e.g. "The Biological Diversity Act", "The Patents Act", "The Drugs and Cosmetics Act", "Food Safety and Standards Act"). Do NOT add long phrases or specific ingredients.
+- AYUSH: Concise domain keywords (e.g. "Ayurvedic drug licensing", "GMP guidelines Ayurvedic", "proprietary medicine").
+- FSSAI: Concise food/dietary terms (e.g. "Ayurveda Aahara", "health supplements nutraceuticals", "labeling display").
+- NBA: Biodiversity terms (e.g. "Access and Benefit Sharing", "Biological Diversity Rules").
+- WIPO_LEX: IP treaty terms (e.g. "traditional knowledge patent", "patent act India").
 
 Return ONLY valid JSON in this exact format:
 {{
@@ -189,15 +189,14 @@ Return ONLY valid JSON in this exact format:
     "SOURCE_B: what needs to be retrieved from this source"
   ],
   "queries": {{
-    "SOURCE_A": ["short search query 1", "short search query 2"],
-    "SOURCE_B": ["short search query 1"]
+    "SOURCE_A": ["search query 1", "search query 2"],
+    "SOURCE_B": ["search query 1"]
   }}
 }}
 
 Rules:
 - Plan: 1 bullet per source (max 4). Each states the research objective.
-- Queries: 1-3 short keyword phrases per source, optimized for search/API retrieval.
-  e.g. "section 3(p) patents act 1970", "ayurveda aahara FSSAI 2022 regulations"
+- Queries: 1-3 concise queries per source following the source query conventions above.
 - Only include sources from the Target sources list.
 - Return ONLY the JSON, no explanation.
 """
@@ -205,21 +204,48 @@ Rules:
     response = llm.invoke(prompt)
     content = response.content.strip()
 
+    # Parse JSON from LLM response using robust multi-stage extraction
+    parsed = None
     try:
         if "```" in content:
-            content = content.split("```")[1]
-            if content.startswith("json"):
-                content = content[4:]
-        parsed = json.loads(content.strip())
-    except Exception:
-        # Fallback: use raw query for each source
+            code_parts = content.split("```")
+            for part in code_parts:
+                part = part.strip()
+                if part.startswith("json"):
+                    part = part[4:].strip()
+                if part.startswith("{") and part.endswith("}"):
+                    try:
+                        parsed = json.loads(part)
+                        break
+                    except Exception:
+                        pass
+        if not parsed:
+            json_match = re.search(r"\{.*\}", content, re.DOTALL)
+            if json_match:
+                parsed = json.loads(json_match.group(0))
+        if not parsed:
+            parsed = json.loads(content.strip())
+    except Exception as parse_err:
+        print(f"  ⚠️  Research planner JSON parse failed ({parse_err}), using structured fallback")
+        default_queries = {
+            "INDIA_CODE": ["The Drugs and Cosmetics Act", "The Food Safety and Standards Act"],
+            "AYUSH": ["Ayurvedic drug licensing", "GMP guidelines Ayurvedic"],
+            "FSSAI": ["Ayurveda Aahara", "health supplements nutraceuticals"],
+            "NBA": ["Access and Benefit Sharing", "Biological Diversity Rules"],
+            "WIPO_LEX": ["traditional knowledge patent", "patent act India"]
+        }
         parsed = {
             "plan": [f"{s}: retrieve relevant provisions" for s in valid_sources],
-            "queries": {s: [query] for s in valid_sources},
+            "queries": {s: default_queries.get(s, ["Ayurvedic regulations"]) for s in valid_sources},
         }
 
     plan_list = parsed.get("plan", [])
-    queue = parsed.get("queries", {s: [query] for s in valid_sources})
+    queue = parsed.get("queries", {})
+    # Ensure every valid source has at least one clean query
+    for s in valid_sources:
+        if s not in queue or not queue[s]:
+            queue[s] = ["The Drugs and Cosmetics Act" if s == "INDIA_CODE" else "Ayurvedic drug licensing"]
+
     plan_text = "\n".join(f"  {i+1}. {p}" for i, p in enumerate(plan_list))
 
     log_node(3, "Research Planner", f"plan ready ({len(plan_list)} objectives)")
@@ -357,12 +383,13 @@ Be precise and cite sources. If evidence is insufficient, say so clearly.
 def citation_validator_node(state: OrchestratorState) -> dict:
     """Check if findings contain proper citations."""
     findings = state.get("findings", "")
-    # Simple heuristic: check for section/act references
     citation_keywords = [
-        "Section", "Act", "Rule", "Regulation",
-        "Article", "Notification", "Schedule",
+        "section", "act", "rule", "regulation",
+        "article", "notification", "schedule",
+        "source:", "[source", "provisions",
     ]
-    has_citations = any(kw in findings for kw in citation_keywords)
+    findings_lower = findings.lower()
+    has_citations = any(kw in findings_lower for kw in citation_keywords)
     log_node(6, "Citation Validator",
              f"citations={'✅ found' if has_citations else '❌ missing'}")
     return {"citations_valid": has_citations}
