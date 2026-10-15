@@ -234,14 +234,13 @@ Rules:
 
 
 # ───────────────────────────────────────────────
-# Node 4: Evidence Retrieval (3-Layer)
-#   Layer 1 → History embeddings (past conversations)
-#   Layer 2 → Evidence embeddings (past retrieved docs)
-#   Layer 3 → Fresh source retrieval (live adapters)
+# Node 4: Evidence Retrieval (2-Layer)
+#   Layer 1 → Session history embeddings (current session only)
+#   Layer 2 → Fresh source retrieval (live adapters)
 # ───────────────────────────────────────────────
 def evidence_retrieval_node(state: OrchestratorState) -> dict:
-    """3-layer retrieval: history → cached evidence → fresh scraping."""
-    log_node(4, "Evidence Retrieval", "3-layer retrieval starting...")
+    """2-layer retrieval: session history → fresh scraping."""
+    log_node(4, "Evidence Retrieval", "2-layer retrieval starting...")
     queue = state.get("research_queue", {})
     jurisdiction = state.get("jurisdiction", "IN")
     session_id = state.get("session_id", "")
@@ -249,47 +248,31 @@ def evidence_retrieval_node(state: OrchestratorState) -> dict:
 
     evidence_list = []
 
-    # ── Layer 1: History Embeddings ──
-    # Search past chat history for relevant context
-    print("    📜 Layer 1: Searching history embeddings...", flush=True)
-    try:
-        hist_results = db.search_history(user_query, top_k=3)
-        for h in hist_results:
-            evidence_list.append({
-                "source": f"HISTORY (session: {h['session_id'][:8]})",
-                "text": h["content"],
-                "status": "ok",
-                "documents": [],
-                "error": "",
-                "retrieval_layer": "history_embedding",
-                "similarity_score": h["score"],
-            })
-        print(f"    📜 Layer 1: Found {len(hist_results)} relevant history items", flush=True)
-    except Exception as e:
-        print(f"    ⚠️  Layer 1 error: {e}", flush=True)
+    # ── Layer 1: Session History Embeddings (current session only) ──
+    # Only retrieve past conversation context from THIS session
+    if session_id:
+        print(f"    📜 Layer 1: Searching history for session {session_id[:8]}...", flush=True)
+        try:
+            hist_results = db.search_history(user_query, session_id=session_id, top_k=3)
+            for h in hist_results:
+                evidence_list.append({
+                    "source": f"SESSION_HISTORY",
+                    "text": h["content"],
+                    "status": "ok",
+                    "documents": [],
+                    "error": "",
+                    "retrieval_layer": "history_embedding",
+                    "similarity_score": h["score"],
+                })
+            print(f"    📜 Layer 1: Found {len(hist_results)} relevant history items", flush=True)
+        except Exception as e:
+            print(f"    ⚠️  Layer 1 error: {e}", flush=True)
+    else:
+        print("    📜 Layer 1: No session_id — skipping history search", flush=True)
 
-    # ── Layer 2: Evidence Embeddings ──
-    # Search past retrieved evidence for reuse
-    print("    📦 Layer 2: Searching evidence embeddings...", flush=True)
-    try:
-        evid_results = db.search_evidence(user_query, top_k=5)
-        for ev in evid_results:
-            evidence_list.append({
-                "source": f"CACHED_{ev['source']}",
-                "text": ev["content"],
-                "status": "ok",
-                "documents": [],
-                "error": "",
-                "retrieval_layer": "evidence_embedding",
-                "similarity_score": ev["score"],
-            })
-        print(f"    📦 Layer 2: Found {len(evid_results)} cached evidence items", flush=True)
-    except Exception as e:
-        print(f"    ⚠️  Layer 2 error: {e}", flush=True)
-
-    # ── Layer 3: Fresh Source Retrieval ──
+    # ── Layer 2: Fresh Source Retrieval ──
     # Live scraping from adapters using the research queue
-    print("    🌐 Layer 3: Fresh source retrieval...", flush=True)
+    print("    🌐 Layer 2: Fresh source retrieval...", flush=True)
     fresh_count = 0
     for source_name, queries in queue.items():
         adapter = ADAPTER_REGISTRY.get(source_name)
@@ -306,9 +289,6 @@ def evidence_retrieval_node(state: OrchestratorState) -> dict:
                         "error": result.get("error", ""),
                         "retrieval_layer": "fresh",
                     })
-                    # Store fresh evidence as embedding for future reuse
-                    if text and session_id:
-                        db.store_evidence_embed(session_id, source_name, f"Query [{q}]: {text}")
                     fresh_count += 1
                 except Exception as e:
                     evidence_list.append({
@@ -319,7 +299,7 @@ def evidence_retrieval_node(state: OrchestratorState) -> dict:
                         "error": str(e),
                         "retrieval_layer": "fresh",
                     })
-    print(f"    🌐 Layer 3: {fresh_count} fresh retrievals executed", flush=True)
+    print(f"    🌐 Layer 2: {fresh_count} fresh retrievals executed", flush=True)
 
     # ── Summary ──
     ok = sum(1 for e in evidence_list if e.get('status') in ('ok', 'partial'))
